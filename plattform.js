@@ -454,12 +454,26 @@
     },
   });
 
+  // Ohne Claude auf dem Server: Texterkennung direkt auf dem Gerät (ocr.js) und Auswertung nach festen Regeln (kern.js)
+  const sampleLokal = Object.freeze({
+    lokal: true,
+    limits: async () => ({ inputBytes: 262144, images: { maxCount: 1, maxKante: 2600, maxBytes: 20000000, mediaTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] } }),
+    async json(input, opt = {}) {
+      const bilder = [].concat(opt.images || []);
+      const marke = "Text des Belegs (aus einer PDF-Datei):";
+      let text = String(input).includes(marke) ? String(input).slice(String(input).indexOf(marke) + marke.length) : "";
+      try { for (const b of bilder) text += `\n${await window.BH_OCR.text(b)}`; }
+      catch (e) { throw Object.assign(new Error(e.message || "Texterkennung nicht möglich"), { code: "network_error" }); }
+      return window.Kern.belegAusText(text);
+    },
+  });
+
   async function faehigkeit(name) {
     if (name === "db") return db;
     if (name === "user") return user;
     if (name === "assets") return assets;
     if (name === "downloads") return downloads;
-    if (name === "sample") return (await sampleAktiv()) ? sample : null;
+    if (name === "sample") return (await sampleAktiv()) ? sample : window.BH_OCR ? sampleLokal : null;
     return null;
   }
 

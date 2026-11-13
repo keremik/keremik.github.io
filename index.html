@@ -17,6 +17,7 @@
 <body>
 <script src="vendor/supabase-2.116.0.js"></script>
 <script src="konfig.js"></script>
+<script src="ocr.js"></script>
 <script src="plattform.js"></script>
 <title>Techniker-Rechnungen</title>
 <style>
@@ -1195,6 +1196,75 @@ select { max-width: 100%; text-overflow: ellipsis; }
       summe_brutto: zahlAus(a.summe_brutto),
     };
   }
+  /**
+   * Beleg ohne Claude: aus dem erkannten Text (Texterkennung auf dem Gerät oder PDF-Text) nach festen Regeln
+   * dieselbe Form bauen, die belegAuswerten erwartet. Grob, aber kostenlos – das Ergebnis ist ein Vorschlag zum Prüfen.
+   */
+  function belegAusText(text) {
+    // „195, 20“ (Lücke nach dem Komma) liest die Texterkennung oft – zusammenziehen
+    const zeilen = String(text || "").split(/\r?\n/).map((z) => z.replace(/\s+/g, " ").replace(/(\d), (\d{2})(?!\d)/g, "$1,$2").trim()).filter(Boolean);
+    const alles = zeilen.join("\n");
+    const art = /hotel|übernacht|uebernacht|logis|anreise|abreise|zimmer|pension|gasthof/i.test(alles) ? "hotel"
+      : /park(haus|schein|platz|ticket|gebühr|gebuehr|en\b|dauer|zeit)|apcoa|contipark|q-park|tiefgarage/i.test(alles) ? "parken"
+      : /baumarkt|bauhaus|hornbach|\bobi\b|toom|hagebau|globus|elektro|conrad|würth|wuerth|werkzeug|material/i.test(alles) ? "material" : "sonstiges";
+    // Beträge: 1.234,56 / 63,70 / 4.50 (Punkt nur mit genau zwei Stellen und nicht als Datum)
+    const betraege = (z) => [...z.matchAll(/(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)[,.](\d{2})(?![\d.,]*\d)/g)]
+      .filter((m) => !/^\d{1,2}\.\d{2}\.\d{2,4}/.test(z.slice(m.index)))
+      .map((m) => Number(`${m[1].replace(/\./g, "")}.${m[2]}`)).filter((x) => x > 0 && x < 100000);
+    const daten = [...alles.matchAll(/(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?!\d)/g)].map((m) => datumAus(m[0])).filter(Boolean);
+    const nachWort = (wort) => {
+      const z = zeilen.find((x) => wort.test(x));
+      const m = z && /(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})/.exec(z.slice(z.search(wort)));
+      return m ? datumAus(m[0]) : null;
+    };
+    let anreise = null, abreise = null;
+    if (art === "hotel") {
+      anreise = nachWort(/anreise|ankunft|arrival|check-?in|\bvon\b/i);
+      abreise = nachWort(/abreise|abfahrt|departure|check-?out|\bbis\b/i);
+      const zeitraum = /(\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2}))\s*(?:-|–|bis)\s*(\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2}))/.exec(alles);
+      if ((!anreise || !abreise) && zeitraum) { anreise = datumAus(zeitraum[1]); abreise = datumAus(zeitraum[2]); }
+      if (anreise && abreise && tageZwischen(anreise, abreise) <= 0) abreise = null;
+    }
+    const nachtTreffer = /(\d{1,2})\s*(?:x\s*)?(?:nächte|naechte|nacht|übernachtung(?:en)?|uebernachtung(?:en)?)/i.exec(alles);
+    const naechte = art !== "hotel" ? null : nachtTreffer ? Number(nachtTreffer[1]) : anreise && abreise ? tageZwischen(anreise, abreise) : null;
+    // Summe: größter Betrag in einer Summenzeile, sonst der größte Betrag überhaupt
+    const SUMME = /gesamt|summe|total|endbetrag|rechnungsbetrag|zu zahlen|zahlbetrag|betrag|brutto/i, NICHT = /netto|mwst|mehrwert|ust|steuer|zwischensumme|rückgeld|rueckgeld|gegeben/i;
+    const summen = zeilen.filter((z) => SUMME.test(z) && !NICHT.test(z)).flatMap(betraege);
+    const alle = zeilen.flatMap(betraege);
+    // ohne Summenzeile: der größte Betrag, der zweimal vorkommt (Summe und Zahlung), sonst der größte
+    const doppelt = alle.filter((x, i) => alle.indexOf(x) !== i);
+    const summe = summen.length ? Math.max(...summen) : doppelt.length ? Math.max(...doppelt) : alle.length ? Math.max(...alle) : null;
+    // Steueraufstellung: Zeile mit Satz und Netto + MwSt = Brutto
+    const tabelle = [];
+    for (const z of zeilen) {
+      const s = /(?<!\d)(19|7)(?:[,.]0{1,2})?\s?%/.exec(z);
+      const b = betraege(z);
+      if (!s || b.length < 2) continue;
+      const satz = Number(s[1]);
+      for (const netto of b) {
+        const brutto = b.find((x) => x !== netto && Math.abs(runden(netto * (1 + satz / 100)) - x) <= 0.02);
+        if (brutto && !tabelle.some((t) => t.satz === satz)) { tabelle.push({ satz, netto, mwst: runden(brutto - netto), brutto }); break; }
+      }
+    }
+    const saetze = [...new Set([...alles.matchAll(/(?<!\d)(19|7)(?:[,.]0{1,2})?\s?%/g)].map((m) => Number(m[1])))];
+    const gastTreffer = art !== "hotel" ? null
+      : /(?:[Gg]ast(?:name)?|[Gg]uest|\b[Nn]ame)[ \t]*:?[ \t]*((?:[Hh]errn?|[Ff]rau)[ \t]+)?([A-ZÄÖÜ][\p{L}'-]+(?:,?[ \t]+[A-ZÄÖÜ][\p{L}'-]+){0,2})/u.exec(alles)
+        || /([Hh]errn?|[Ff]rau)[ \t]+([A-ZÄÖÜ][\p{L}'-]+[ \t]+[A-ZÄÖÜ][\p{L}'-]+)/u.exec(alles);
+    const gast = gastTreffer ? gastTreffer[2].trim() : null;
+    const bezeichnung = { hotel: "Übernachtung", parken: "Parken", material: "Material", sonstiges: "Beleg" }[art];
+    const tabSumme = runden(tabelle.reduce((s, t) => s + t.brutto, 0));
+    const passt = tabelle.length && summe !== null && Math.abs(tabSumme - summe) <= 0.02;
+    const posten = summe === null ? []
+      : passt ? tabelle.map((t) => ({ text: art === "hotel" ? (t.satz === 7 ? "Übernachtung" : "Frühstück und Nebenleistungen") : bezeichnung, gast, menge: art === "hotel" && t.satz === 7 ? naechte || 1 : 1, brutto: t.brutto, mwst_satz: t.satz }))
+        : [{ text: bezeichnung, gast, menge: art === "hotel" ? naechte || 1 : 1, brutto: summe, mwst_satz: saetze.length === 1 ? saetze[0] : art === "hotel" && !saetze.length ? 7 : null }];
+    return {
+      art, haendler: zeilen[0] || "", belegnummer: null, datum: daten[0] || null, anreise, abreise, naechte,
+      fruehstueck: art === "hotel" ? /frühstück|fruehstueck|breakfast/i.test(alles) : null, gast, auftragsnummer_handschriftlich: null,
+      posten, summe_brutto: summe, mwst_tabelle: passt ? tabelle : [], lesbar: summe !== null && daten.length > 0,
+      hinweis: "Auf dem Gerät gelesen (ohne Claude) – bitte Betrag, Datum und Zuordnung prüfen.",
+    };
+  }
+
   /** „112 Herr Max Muster“, „Zi. 112 Max Muster“, „Muster, Max“ -> „Max Muster“ */
   function gastName(g) {
     let s = String(g || "").trim();
@@ -1480,7 +1550,7 @@ select { max-width: 100%; text-overflow: ellipsis; }
   const Kern = {
     textAusSeiten, parseText, normName, istHotel, blockKey, minuten, stunden, parseDatum, datumText, wocheVon,
     wocheZeitraum, arbeitstage, runden, zahl, zahlGenau, euro, einsaetze, wochen, signatur, gruppen, summen, leistungszeitraum,
-    offeneWochen, rechnungPdf, rechnungsDaten, freieRechnungsDaten, zahlEingabe, belegAuswerten, datumAus, fingerabdruck, rechnungGeaendert, kanonisch, kurznameVon, spanneEingabe, betrag, uhrzeitKurz, SEGMENTE,
+    offeneWochen, rechnungPdf, rechnungsDaten, freieRechnungsDaten, zahlEingabe, belegAuswerten, belegAusText, datumAus, fingerabdruck, rechnungGeaendert, kanonisch, kurznameVon, spanneEingabe, betrag, uhrzeitKurz, SEGMENTE,
     feiertage, feiertag, abwesenheitsTage, tagessoll, stundenKonto, ABWESENHEITEN,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = Kern;
@@ -3257,7 +3327,7 @@ Regeln:
         return new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.9));
       };
       const maxBilder = (S.sampleBilder && S.sampleBilder.maxCount) || 4;
-      const bilder = [await zeichne(0, 0, W, H, 1600)];
+      const bilder = [await zeichne(0, 0, W, H, (S.sampleBilder && S.sampleBilder.maxKante) || 1600)];
       const n = Math.min(Math.max(0, Math.min(6, maxBilder - 1)), Math.ceil((W * H) / 1e6 / 1.15));
       if (n >= 2) {
         const spalten = n > 3 ? 2 : 1, zeilen = Math.ceil(n / spalten);
