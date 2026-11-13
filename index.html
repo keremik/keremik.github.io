@@ -2739,7 +2739,9 @@ select { max-width: 100%; text-overflow: ellipsis; }
       ${S.kannSchreiben ? `<details data-key="zugang-neu"><summary>Neuen Zugang anlegen</summary>
         <form data-form="zugang-neu" class="felder">
           <label>Name<input name="name" required autocomplete="off" placeholder="Vorname Nachname" id="zn-name"></label>
-          <label>Benutzername<input name="benutzer" required autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,30}" placeholder="z. B. murat" id="zn-benutzer"></label>
+          <label>Benutzername (ohne Umlaute und Leerzeichen)<input name="benutzer" required autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,30}"
+            title="Nur Buchstaben a–z, Ziffern, Punkt und Bindestrich – keine Umlaute (ü → ue) und keine Leerzeichen" placeholder="z. B. murat" id="zn-benutzer"
+            oninput="this.value = this.value.replace(/ä/gi, 'ae').replace(/ö/gi, 'oe').replace(/ü/gi, 'ue').replace(/ß/g, 'ss').replace(/\\s+/g, '')"></label>
           <label>Zugang<select name="wert" id="zn-wert">
             ${ks.map((k) => `<option value="${esc(k)}">Techniker: ${esc(S.techniker[k].name)}</option>`).join("")}
             ${S.ich.owner ? `<option value="admin">Admin (sieht alles)</option>` : ""}

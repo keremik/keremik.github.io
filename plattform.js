@@ -92,7 +92,7 @@
       <p class="leise">Die App ist neu. Lege jetzt <b>dein Konto</b> an – du wirst damit <b>Inhaber</b>: du siehst alles, ernennst Admins und legst die Zugänge für alle anderen an.</p>
       <form id="bh-erst" autocomplete="on">
         <label>Dein Name<input name="name" id="bh-e-name" required autocomplete="name" value="${esc(werte.name || "")}" placeholder="Vorname Nachname"></label>
-        <label>Benutzername (zum Anmelden)<input name="benutzer" id="bh-e-benutzer" required autocomplete="username" autocapitalize="none" spellcheck="false"
+        <label>Benutzername (zum Anmelden, ohne Umlaute)<input name="benutzer" id="bh-e-benutzer" required oninput="this.value = this.value.replace(/ä/gi, 'ae').replace(/ö/gi, 'oe').replace(/ü/gi, 'ue').replace(/ß/g, 'ss').replace(/\\s+/g, '')" autocomplete="username" autocapitalize="none" spellcheck="false"
           value="${esc(werte.benutzer || "")}" placeholder="z. B. kerem" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,30}" title="2–31 Zeichen: Buchstaben, Ziffern, Punkt, Bindestrich"></label>
         <label>Passwort (mindestens 8 Zeichen)<input name="passwort" id="bh-e-pw" type="password" required minlength="8" autocomplete="new-password"></label>
         <label>Passwort wiederholen<input name="passwort2" id="bh-e-pw2" type="password" required minlength="8" autocomplete="new-password"></label>
